@@ -647,11 +647,24 @@ function buildMapStationing(source,start){
  const stationAt=d=>{let shift=start;for(const eq of equations){if(eq.distance<=d+1e-6)shift=eq.ahead-eq.distance;else break}return d+shift};
  const place=d=>{let i=1;while(i<chain.length-1&&chain[i]<d)i++;const a=pts[i-1],b=pts[i],length=chain[i]-chain[i-1],t=length?Math.max(0,Math.min(1,(d-chain[i-1])/length)):0;return toLL({e:a.e+(b.e-a.e)*t,n:a.n+(b.n-a.n)*t})};
  const entries=[];const add=(d,kind)=>{if(entries.some(e=>Math.abs(e.distance-d)<0.1)){const existing=entries.find(e=>Math.abs(e.distance-d)<0.1);if(kind==='PI')existing.kind='PI';return}entries.push({distance:d,kind})};
- for(let d=0;d<=total+1e-6;d+=200)add(d,'200');
+ // Ball stationing: labels are exact multiples of 200 STATION FEET, not
+ // locations at every 200 measured feet from the selected starting point.
+ // Each BACK/AHEAD equation starts a new station range, skipping or repeating
+ // the applicable ball stations as the equation requires.
+ let segmentStart=0,segmentOffset=start;
+ for(const next of [...equations.map(eq=>({end:eq.distance,eq})),{end:total,eq:null}]){
+  const first=Math.ceil((segmentStart+segmentOffset-1e-7)/200);
+  const last=Math.floor((next.end+segmentOffset+1e-7)/200);
+  for(let k=first;k<=last;k++){
+   const d=k*200-segmentOffset;
+   if(d>=segmentStart-1e-6&&d<=next.end+1e-6)add(Math.max(0,Math.min(total,d)),'200');
+  }
+  if(next.eq){segmentStart=next.end;segmentOffset=next.eq.ahead-next.end}
+ }
  chain.forEach((d,i)=>add(d,i===0?'BEGIN':i===chain.length-1?'END':'PI'));
  equations.forEach(eq=>add(eq.distance,'EQUATION'));
  entries.sort((a,b)=>a.distance-b.distance);
- const labels=entries.map(entry=>{const eq=equations.find(x=>Math.abs(x.distance-entry.distance)<0.1);const text=eq?formatStation(eq.back)+' BCK / '+formatStation(eq.ahead)+' AHD':formatStation(stationAt(entry.distance));const [lat,lon]=place(entry.distance);return {lat,lon,text,distance:entry.distance,kind:eq?'EQUATION':entry.kind}});
+ const labels=entries.map(entry=>{const eq=equations.find(x=>Math.abs(x.distance-entry.distance)<0.1);const station=stationAt(entry.distance),text=eq?formatStation(eq.back)+' BCK / '+formatStation(eq.ahead)+' AHD':formatStation(station);const [lat,lon]=place(entry.distance);return {lat,lon,text,station,distance:entry.distance,kind:eq?'EQUATION':entry.kind}});
  return {source,start,labels,total,interval:200};
 }
 function setMapStationing(redo){
@@ -661,7 +674,7 @@ function setMapStationing(redo){
   const start=parseStation($('stationingStart').value);
   const result=buildMapStationing(source,start);
   remember();state.stationingOverlay=result;state.stationingVisible=true;$('showStationing').checked=true;
-  render();persist();status((redo?'Recalculated':'Saved')+' stationing: '+result.labels.length+' labels, 200-ft intervals and PIs.');
+  render();persist();status((redo?'Recalculated':'Saved')+' stationing: '+result.labels.length+' labels, 200-ft ball stations and PIs.');
   $('stationingInfo').textContent=(redo?'Redone':'Set')+' · '+result.labels.length+' labels · '+(result.total).toFixed(1)+' ft · '+(state.stationEquations||[]).length+' equation(s). Pick another CL to change the source.';
  }catch(e){alert('Stationing: '+e.message)}
 }
@@ -674,8 +687,8 @@ function renderStationingOverlay(){
   if(p.kind==='BEGIN'||p.kind==='END'||p.kind==='EQUATION')return true;
   if(zoom<12)return false;
   if(p.kind==='PI')return zoom>=16;
-  const d=Number.isFinite(p.distance)?p.distance:i*200;
-  return Math.abs(d/spacing-Math.round(d/spacing))<0.015;
+  const station=Number.isFinite(p.station)?p.station:(!p.text.includes(' ') ? parseStation(p.text):NaN);
+  return Number.isFinite(station)&&Math.abs(station/spacing-Math.round(station/spacing))<0.0001;
  });
  // Prevent stacked text when several station points occupy the same screen space.
  const occupied=[];const minPixels=zoom<14?65:zoom<17?48:30;
