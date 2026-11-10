@@ -189,6 +189,23 @@ function routeImportedFeatureClick(f,e){
  if((m==='editLine'||m==='addVertex')&&isLine){insertKMZVertex(f,e.latlng);return true}
  if(m==='gisPickLine'&&isLine){const c=f.geometry.type==='LineString'?f.geometry.coordinates:f.geometry.coordinates[0];chooseGISRoute(c.map(x=>[x[1],x[0]]));return true}
  if(m==='dimension'){dimensionPick(e.latlng);return true}
+ if(m==='select'&&isLine){
+  const properties=f.properties||{};
+  const label=properties.name||properties.Name||properties.NAME||'Imported KMZ Line';
+  const rows=Object.entries(properties).filter(([key,value])=>
+   !key.startsWith('_')&&key.toLowerCase()!=='description'&&
+   key.toLowerCase()!=='name'&&value!==null&&value!==undefined&&
+   String(value).trim()!=='');
+  const details=rows.map(([key,value])=>
+   '<div style="padding:6px 0;border-bottom:1px solid #52616a55"><b>'+esc(key)+
+   '</b><div style="overflow-wrap:anywhere;white-space:pre-wrap">'+
+   esc(typeof value==='object'?JSON.stringify(value):String(value))+'</div></div>').join('');
+  const html='<div style="min-width:200px;max-width:300px;max-height:330px;overflow:auto;color:#182531">'+
+   '<b style="font-size:15px">'+esc(label)+'</b>'+
+   '<div style="margin-top:8px">'+(details||'No additional line attributes.')+'</div></div>';
+  L.popup({maxWidth:340,autoPan:true}).setLatLng(e.latlng).setContent(html).openOn(map);
+  return true;
+ }
  if(m==='select')return false;
  if(m==='delete')return false;
  onMapClick(e);return true;
