@@ -1275,15 +1275,18 @@ async function extractGIS(){const btn=$('gisExtract');btn.disabled=true;try{
  const buffer=turf.buffer(shape,radius,{units:'feet'}),bounds=gisFeatureBounds(buffer);
  const selectedCats=new Set(Array.from(document.querySelectorAll('.gisCategory:checked')).map(el=>el.dataset.category));
  const datasets=Array.from(document.querySelectorAll('.gisDataset:checked')).map(x=>state.gisLibrary[Number(x.value)]).filter(Boolean);
- if(!selectedCats.size&&!datasets.length)throw Error('Check at least one GIS category');
+ const cloudReady=window.terraTraceR2?.hasSelection?.()||false;
+ if(cloudReady){selectedCats.clear();datasets.length=0}
+ if(!selectedCats.size&&!datasets.length&&!cloudReady)throw Error('Check at least one GIS category');
  const limit=10000,unique=new Set(),results=[],stats={};let scanned=0,regions=0;
- function consider(f,cat,origin){if(!f?.geometry||results.length>=limit)return;let fb;try{fb=gisFeatureBounds(f)}catch(e){return}if(!gisBoundsOverlap(bounds,fb))return;try{if(!turf.booleanIntersects(f,buffer))return}catch(e){return}const id=JSON.stringify([cat,origin,f.properties?._source,f.properties?._layer,f.geometry]);if(unique.has(id))return;unique.add(id);results.push(f);stats[cat]=(stats[cat]||0)+1}
+ function consider(f,cat,origin){if(!f?.geometry||results.length>=limit)return;let fb;try{fb=gisFeatureBounds(f)}catch(e){return}if(!gisBoundsOverlap(bounds,fb))return;try{if(!turf.booleanIntersects(f,buffer))return}catch(e){return}const id=JSON.stringify([cat,origin,f.properties?._source,f.properties?._layer,f.geometry]);if(unique.has(id))return;unique.add(id);results.push(f);stats[cat]=(stats[cat]||0)+1;return true}
  for(const p of gisPackages){if(!gisBoundsOverlap(bounds,p.manifest.bounds))continue;const layers=p.manifest.layers.filter(l=>selectedCats.has(l.category));if(!layers.length)continue;regions++;status('Searching region '+regions+' · '+p.key.split('__')[0]);await new Promise(r=>setTimeout(r,0));const blob=await gisPkgGet(p.key);if(!blob)continue;const zip=await JSZip.loadAsync(blob);
   for(const layer of layers){const entry=zip.file(layer.path);if(!entry)continue;const txt=await entry.async('string');const lines=txt.split('\n');for(let i=0;i<lines.length;i++){if(!lines[i])continue;scanned++;try{consider(JSON.parse(lines[i]),layer.category,p.key)}catch(e){}if(i%2000===0){status('Scanning '+layer.category+' · '+scanned.toLocaleString()+' features');await new Promise(r=>setTimeout(r,0))}if(results.length>=limit)break}if(results.length>=limit)break}if(results.length>=limit)break
  }
  for(const d of datasets){for(const f of d.geo.features){consider(f,d.name,d.name);if(results.length>=limit)break}}
- if(!results.length){status('No matching features in registered regions');alert('No matching GIS features within the selected buffer. Check that you registered the regional ZIPs covering this route.');return}
- state.reference.push({type:'FeatureCollection',features:results});render();persist();status('GIS search complete: '+results.length.toLocaleString()+' matching features');alert('Found '+results.length.toLocaleString()+' GIS features from '+regions+' regional package(s).\n'+Object.entries(stats).map(([k,v])=>k+': '+v).join('\n')+(results.length>=limit?'\nReached 10,000-feature safety limit; narrow the corridor.':''));
+ if(cloudReady)await window.terraTraceR2.query(buffer,consider,status,limit);
+ if(!results.length){status('No GIS features intersect the selected buffer');alert('No matching GIS features within the selected buffer. Verify the cloud index covers this route and the desired categories are checked.');return}
+ state.reference.push({type:'FeatureCollection',features:results});render();persist();status('GIS search complete: '+results.length.toLocaleString()+' matching features');alert('Found '+results.length.toLocaleString()+' GIS features.\n'+Object.entries(stats).map(([k,v])=>k+': '+v).join('\n')+(results.length>=limit?'\nReached 10,000-feature safety limit; narrow the corridor.':''));
  }catch(e){alert('GIS search: '+e.message);console.error(e)}finally{btn.disabled=false}}
 function deleteGISFeature(i,f){if(!confirm('Delete GIS feature?'))return;remember();const obj=state.reference[i];if(obj.type==='FeatureCollection')obj.features.splice(obj.features.indexOf(f),1);else state.reference.splice(i,1);render();persist()}
 window.gisFeatureInfo=(i,j)=>{const ref=state.reference[i],f=ref?.features?.[j]||ref;if(!f)return;const name=prompt('Feature name',f.properties?.name||f.properties?.Name||'GIS feature');if(name===null)return;remember();f.properties=f.properties||{};f.properties.name=name;render();persist()};
@@ -1374,6 +1377,97 @@ $('gisClearPackages').onclick=async()=>{if(!confirm('Remove regional ZIPs from T
    staged.forEach(f=>dt.items.add(f));input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));
    state('Sent '+staged.length+' GIS dataset(s) to the existing importer. Wait for the loaded status, then use Pick Line / Pick Area and SEARCH CHECKED GIS IN BUFFER.');
   }catch(e){state('Load failed: '+e.message);alert(e.message)}finally{btn.disabled=false}
+ };
+})();
+/* R2 corridor search: category selection + bounded, authenticated tile fetching. */
+(function(){
+ const $=id=>document.getElementById(id);
+ const old=$('gisCloudRefresh')?.closest('section');
+ if(old)old.style.display='none'; // Legacy object-by-object browser is intentionally retired.
+ const anchor=$('gisLibrary');
+ // Retain legacy local GIS import code for compatibility, but keep the cloud
+ // corridor workflow free of SHP file pickers and dataset-by-dataset controls.
+ for(const id of ['gisLibrary','gisPackageInfo','gisCategoryList','gisDatasetList','gisClearLibrary','gisClearPackages']){
+  const element=$(id);if(element)element.style.display='none';
+ }
+ document.querySelectorAll('.gisCategory,.gisDataset').forEach(check=>{check.checked=false});
+ const panel=document.createElement('section');
+ panel.style.cssText='margin:10px 0;padding:12px;background:#0a1017;border:1px solid #343e48;border-radius:8px';
+ panel.innerHTML='<div style="font-weight:700;letter-spacing:1px;color:#dde8ed">R2 GIS — AUTOMATIC CORRIDOR SEARCH</div><div class="note">Choose GIS categories, then Pick Line on your project KMZ or Pick Area. Enter the buffer feet and click SEARCH CHECKED GIS IN BUFFER below. No source file picking.</div><button type="button" class="btn" id="r2IndexRefresh">↻ CONNECT GIS CATEGORIES</button><div id="r2IndexStatus" class="note">Connect using your Cloud API URL and project token above.</div><div id="r2IndexCategories"></div>';
+ anchor.parentNode.insertBefore(panel,anchor);
+ const api=()=>($('cloudApi')?.value||'').trim().replace(/\/+$/,'');
+ const token=()=>($('cloudToken')?.value||'').trim();
+ const status=message=>$('r2IndexStatus').textContent=message;
+ const selected=new Set();
+ let catalog=null;
+ async function fetchR2(path){
+  if(!api()||!token())throw Error('Enter the Cloud API URL and access token in Cloud Projects first.');
+  const r=await fetch(api()+path,{headers:{Authorization:'Bearer '+token()}});
+  if(!r.ok){const e=await r.json().catch(()=>({}));throw Error(e.error||'HTTP '+r.status)}
+  return r;
+ }
+ function refreshUI(){
+  const container=$('r2IndexCategories');container.replaceChildren();
+  for(const c of catalog?.categories||[]){
+   if(!c.tiles?.length)continue;
+   const row=document.createElement('label');row.style.cssText='display:flex;align-items:center;gap:9px;margin:5px 0;padding:8px;background:#141d25;border:1px solid #293640;border-radius:6px';
+   const check=document.createElement('input');check.type='checkbox';check.style.width='auto';check.checked=selected.has(c.id);
+   check.addEventListener('change',()=>check.checked?selected.add(c.id):selected.delete(c.id));
+   const info=document.createElement('span');
+   const name=document.createElement('strong');name.textContent=c.name;
+   const detail=document.createElement('small');detail.style.cssText='display:block;color:#8ca8b5';detail.textContent=Number(c.features||0).toLocaleString()+' features across '+Number(c.sources||0)+' source layer(s)';
+   info.append(name,detail);row.append(check,info);container.append(row);
+  }
+ }
+ $('r2IndexRefresh').onclick=async()=>{
+  const button=$('r2IndexRefresh');button.disabled=true;
+  try{
+   status('Connecting to GIS search library…');
+   const data=await(await fetchR2('/gis/index')).json();
+   if(data.format!=='TerraTrace R2 Spatial Tiles v1'||!Array.isArray(data.categories))throw Error('GIS catalog format is not supported.');
+   catalog=data;selected.clear();
+   for(const c of data.categories)if(/parcel|pipeline/i.test(c.name))selected.add(c.id);
+   refreshUI();
+   status(data.categories.length+' categories connected · Index: '+data.generatedAt+(data.skippedFeatures?' · WARNING: '+data.skippedFeatures+' features skipped during preparation':''));
+  }catch(e){catalog=null;selected.clear();refreshUI();status(e.message)}
+  finally{button.disabled=false}
+ };
+ window.terraTraceR2={
+  hasSelection:()=>!!catalog&&selected.size>0,
+  async query(buffer,consider,mapStatus,limit){
+   if(!catalog||!selected.size)return;
+   const bbox=turf.bbox(buffer),size=catalog.cellDegrees;
+   if(!(size>0))throw Error('Invalid GIS tile size');
+   const candidates=[];
+   for(const c of catalog.categories){
+    if(!selected.has(c.id))continue;
+    for(const [x,y,bytes] of c.tiles){
+     if((x+1)*size<bbox[0]||x*size>bbox[2]||(y+1)*size<bbox[1]||y*size>bbox[3])continue;
+     candidates.push({category:c.name,key:'gis-index/v1/tiles/'+c.id+'/'+x+'_'+y+'.ndjson.gz',bytes});
+    }
+   }
+   if(!candidates.length){status('No indexed GIS tiles overlap this corridor.');return}
+   const total=candidates.reduce((n,t)=>n+t.bytes,0);
+   if(candidates.length>220||total>100*1024*1024)
+    throw Error('Selected corridor requires '+candidates.length+' tiles ('+(total/1048576).toFixed(1)+' MB). Reduce buffer or split the alignment into sections.');
+   let checked=0,found=0;
+   for(let i=0;i<candidates.length;i++){
+    const tile=candidates[i];mapStatus('R2 GIS tile '+(i+1)+'/'+candidates.length+' · '+tile.category);
+    const response=await fetchR2('/gis/tile?key='+encodeURIComponent(tile.key));
+    const lines=(await response.text()).split('\n');
+    for(const line of lines){
+     if(!line.trim())continue;
+     checked++;
+     let feature;
+     try{feature=JSON.parse(line)}catch{continue}
+     if(consider(feature,tile.category,tile.key))found++;
+     if(checked%1500===0)await new Promise(r=>setTimeout(r,0));
+     if(found>=limit)break;
+    }
+    if(found>=limit)break;
+   }
+   status('Searched '+candidates.length+' nearby tiles across selected GIS categories · '+checked.toLocaleString()+' candidate features');
+  }
  };
 })();
 (function(){
