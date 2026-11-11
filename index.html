@@ -83,9 +83,17 @@ function refreshImportedLayersUI(){
   const selected=state.reference[Number(select.value)];
   const features=selected?.type==='FeatureCollection'?selected.features:selected?.type==='Feature'?[selected]:[];
   const groups=new Map();
-  for(const f of features){const name=f.properties?._kmzLayer||'Unfiled';if(!groups.has(name))groups.set(name,[]);groups.get(name).push(f)}
+  for(const f of features){
+   const p=f.properties||{};
+   // CAD_LAYER from KMZ attributes takes priority over the enclosing KML folder.
+   const layerKey=Object.keys(p).find(k=>/^(cad[ _-]?layer|layer)$/i.test(k));
+   const raw=(layerKey&&p[layerKey])||p._kmzLayer||'Unfiled';
+   const name=String(raw).trim()||'Unfiled';
+   if(!groups.has(name))groups.set(name,[]);
+   groups.get(name).push(f);
+  }
   if(!features.length)return;
-  const heading=document.createElement('div');heading.className='note';heading.textContent='KMZ LAYERS ('+groups.size+') — visibility and colors';groupPanel.append(heading);
+  const heading=document.createElement('div');heading.className='note';heading.textContent='KMZ LAYERS ('+groups.size+') — grouped by CAD_LAYER / layer / folder';groupPanel.append(heading);
   for(const [name,items] of groups){
    const line=document.createElement('div');line.style.cssText='display:flex;align-items:center;gap:7px;margin:7px 0;min-width:0';
    const visible=document.createElement('input');visible.type='checkbox';visible.checked=items.some(f=>f.properties?._kmzHidden!==true);visible.title='Show / hide layer';
