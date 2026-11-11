@@ -79,30 +79,25 @@ function setupImportedLayersUI(){
 const ttKMZExpandedFiles=new Set();
 function refreshImportedLayersUI(){
  const container=$('importedLayerList');if(!container)return;
+ const previous=$('importedLayerSelect')?.value||'0';
  container.replaceChildren();
  const add=document.createElement('button');add.type='button';add.className='btn primary';add.textContent='＋ Add KMZ / KML';add.style.width='100%';add.onclick=()=>$('fileGIS').click();container.append(add);
- if(!state.reference.length){const empty=document.createElement('div');empty.className='note';empty.textContent='No imported layers.';container.append(empty);return;}
- const groupOf=f=>{const p=f.properties||{};const key=Object.keys(p).find(k=>/^(cad[ _-]?layer|layer)$/i.test(k));return String((key&&p[key])||p._kmzLayer||'Unfiled').trim()||'Unfiled'};
- state.reference.forEach((geo,i)=>{
-  const features=geo.type==='FeatureCollection'?(geo.features||[]):geo.type==='Feature'?[geo]:[];
-  const groups=new Map();for(const f of features){const name=groupOf(f);if(!groups.has(name))groups.set(name,[]);groups.get(name).push(f)}
-  const file=document.createElement('details');file.className='tt-kmz-file';
-  const fileId=String(i)+'|'+String(geo._sourceName||'Imported Layer');
-  // Show all imported file groups immediately; preserve the expanded state while rendering.
-  file.open=ttKMZExpandedFiles.size===0||ttKMZExpandedFiles.has(fileId);
-  file.addEventListener('toggle',()=>{if(file.open)ttKMZExpandedFiles.add(fileId);else ttKMZExpandedFiles.delete(fileId)});
-  const head=document.createElement('summary');head.textContent=(geo._sourceName||'Imported Layer '+(i+1))+' · '+groups.size+' layers';head.title=geo._sourceName||'';file.append(head);
-  const actions=document.createElement('div');actions.className='tt-kmz-actions';
-  const fileVisible=document.createElement('input');fileVisible.type='checkbox';fileVisible.checked=geo._visible!==false;fileVisible.title='Show / hide entire imported file';
-  fileVisible.onchange=()=>{remember();geo._visible=fileVisible.checked;render();persist()};
-  const fileLabel=document.createElement('span');fileLabel.textContent='Show entire file';
-  const remove=document.createElement('button');remove.type='button';remove.className='btn';remove.textContent='Delete file';remove.style.cssText='width:auto;padding:6px 9px;color:#ffb5b5';
-  remove.onclick=()=>{if(!confirm('Remove '+(geo._sourceName||'this imported file')+' and its layers from this project?'))return;remember();state.reference.splice(i,1);kmzSelectedCL=null;render();persist()};
-  actions.append(fileVisible,fileLabel,remove);file.append(actions);
-  const hint=document.createElement('div');hint.className='note';hint.textContent='Right-click a KMZ feature on Windows, or press and hold it on iPad, to change its color. Tap normally to inspect attributes.';file.append(hint);
-  container.append(file);
- });
+ if(!state.reference.length){const empty=document.createElement('div');empty.className='note';empty.textContent='No imported KMZ / KML files.';container.append(empty);return;}
+ const select=document.createElement('select');select.id='importedLayerSelect';select.style.cssText='display:block;width:100%;min-width:0;margin:9px 0 8px';
+ state.reference.forEach((geo,i)=>{const option=document.createElement('option');option.value=String(i);option.textContent=geo._sourceName||'Imported File '+(i+1);select.append(option)});
+ select.value=String(Math.min(Math.max(0,Number(previous)||0),state.reference.length-1));container.append(select);
+ const controls=document.createElement('div');controls.style.cssText='display:flex;align-items:center;gap:9px;margin:7px 0 9px';
+ const show=document.createElement('input');show.type='checkbox';show.id='selectedKMZVisible';show.style.cssText='width:auto;flex:none';
+ const label=document.createElement('label');label.htmlFor='selectedKMZVisible';label.textContent='Show selected KMZ / KML';label.style.cssText='margin:0;flex:1';
+ controls.append(show,label);container.append(controls);
+ const remove=document.createElement('button');remove.type='button';remove.className='btn';remove.textContent='Delete Selected KMZ / KML';remove.style.cssText='width:100%;color:#ffb5b5';container.append(remove);
+ const hint=document.createElement('div');hint.className='note';hint.textContent='Select an imported file above to show or hide it. Tap a feature to view its attributes. Right-click on Windows or tap and hold on iPad to change its color.';container.append(hint);
+ const update=()=>{const geo=state.reference[Number(select.value)];show.checked=!!geo&&geo._visible!==false};
+ select.onchange=update;update();
+ show.onchange=()=>{const geo=state.reference[Number(select.value)];if(!geo)return;remember();geo._visible=show.checked;render();persist()};
+ remove.onclick=()=>{const i=Number(select.value),geo=state.reference[i];if(!geo)return;const name=geo._sourceName||'Imported File '+(i+1);if(!confirm('Remove '+name+' from this project?'))return;remember();state.reference.splice(i,1);kmzSelectedCL=null;render();persist();status('Removed '+name)};
 }
+
 function setupPolygonHold(){
  const el=map.getContainer();let timer=null,origin=null,triggered=false,suppressTapUntil=0;
  const cancel=()=>{clearTimeout(timer);timer=null};
@@ -134,13 +129,13 @@ function setupPolygonHold(){
   if(!$('showRef').checked)return null;
   const latlng=map.containerPointToLatLng(screen),point=turf.point([latlng.lng,latlng.lat]);
   const nearSegment=(a,b)=>{const x=b.x-a.x,y=b.y-a.y,den=x*x+y*y||1,t=Math.max(0,Math.min(1,((screen.x-a.x)*x+(screen.y-a.y)*y)/den));return Math.hypot(screen.x-a.x-t*x,screen.y-a.y-t*y)};
-  let best=null,bestDist=18;
+  let best=null,bestDist=18,polygonFallback=null;
   for(let gi=state.reference.length-1;gi>=0;gi--){
    const collection=state.reference[gi];if(collection._visible===false)continue;
    const fs=collection.type==='FeatureCollection'?(collection.features||[]):collection.type==='Feature'?[collection]:[];
    for(let fi=fs.length-1;fi>=0;fi--){
     const f=fs[fi],g=f.geometry;if(!g||f.properties?._kmzHidden===true)continue;
-    if(/Polygon/.test(g.type)){try{if(turf.booleanPointInPolygon(point,f))return f}catch(e){}continue}
+    if(/Polygon/.test(g.type)){try{if(turf.booleanPointInPolygon(point,f)&&!polygonFallback)polygonFallback=f}catch(e){}continue}
     let lines=[];
     if(g.type==='LineString')lines=[g.coordinates];
     else if(g.type==='MultiLineString')lines=g.coordinates;
@@ -155,7 +150,7 @@ function setupPolygonHold(){
     }
    }
   }
-  return best;
+  return best||polygonFallback;
  };
  const edit=f=>{
   const p=f.properties||(f.properties={});
@@ -203,13 +198,13 @@ function setupPolygonHold(){
   return Object.entries(cleanKMZAttributes(properties)).filter(([k])=>k.toLowerCase()!=='name');
  }
  const showAttributes=(f,position)=>{
-  const p=f.properties||{},name=p.name||p.Name||'Imported polygon';
+  const p=f.properties||{},name=p.name||p.Name||p.NAME||p.CAD_LAYER||'Imported KMZ feature';
   const rows=kmzAttributeRows(p);
   const details=rows.map(([key,value])=>'<div style="padding:5px 0;border-bottom:1px solid #52616a55"><b>'+esc(key)+'</b><div style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(typeof value==='object'?JSON.stringify(value):String(value))+'</div></div>').join('');
-  const html='<div style="min-width:200px;max-width:290px;max-height:300px;overflow:auto;color:#1b2630"><b style="font-size:15px">'+esc(name)+'</b><div style="margin-top:8px">'+(details||'No additional attributes in this file.')+'</div><small style="display:block;margin-top:10px;color:#52616a">Press and hold polygon to change its color.</small></div>';
+  const html='<div style="min-width:200px;max-width:290px;max-height:300px;overflow:auto;color:#1b2630"><b style="font-size:15px">'+esc(name)+'</b><div style="margin-top:8px">'+(details||'No additional attributes in this file.')+'</div><small style="display:block;margin-top:10px;color:#52616a">Right-click or press and hold to change this feature color.</small></div>';
   L.popup({maxWidth:320,autoPan:true}).setLatLng(position).setContent(html).openOn(map);
  };
- map.on('click',e=>{if(state.mode!=='select'||Date.now()<suppressTapUntil)return;const f=pickPolygon(map.latLngToContainerPoint(e.latlng));if(f)showAttributes(f,e.latlng)});
+ map.on('click',e=>{if(state.mode!=='select'||Date.now()<suppressTapUntil)return;const f=pickFeature(map.latLngToContainerPoint(e.latlng));if(f)showAttributes(f,e.latlng)});
  el.addEventListener('pointerdown',e=>{cancel();triggered=false;if(state.mode!=='select'||e.pointerType!=='touch'||!e.isPrimary)return;origin={x:e.clientX,y:e.clientY};const box=el.getBoundingClientRect(),pos=L.point(e.clientX-box.left,e.clientY-box.top);timer=setTimeout(()=>{timer=null;const f=pickFeature(pos);if(f){triggered=true;suppressTapUntil=Date.now()+900;map.closePopup();edit(f)}},650)},{passive:true});
  el.addEventListener('pointermove',e=>{if(origin&&Math.hypot(e.clientX-origin.x,e.clientY-origin.y)>11)cancel()},{passive:true});
  el.addEventListener('pointerup',cancel,{passive:true});el.addEventListener('pointercancel',cancel,{passive:true});
@@ -220,9 +215,10 @@ function render(){refreshImportedLayersUI();for(const collection of state.refere
  layer.on('click',e=>{
   L.DomEvent.stopPropagation(e);
   if(state.mode==='delete'){deleteGISFeature(gi,f);return;}
+  if(state.mode==='select'){if(Date.now()>=suppressTapUntil)showAttributes(f,e.latlng);return;}
   routeImportedFeatureClick(f,e);
  });
- }}).addTo(refLayer);L.geoJSON(g,{filter:f=>f.properties?._kmzHidden!==true&&/LineString/.test(f.geometry?.type||''),style:()=>({color:'#ffffff',weight:24,opacity:0.001,interactive:true}),onEachFeature:(f,hit)=>hit.on('click',e=>{L.DomEvent.stopPropagation(e);if(state.mode==='delete')deleteGISFeature(gi,f);else routeImportedFeatureClick(f,e)})}).addTo(refLayer)}catch(e){console.warn('GIS rendering',e)}});showKMZPIs();if($('showAnnotations').checked)(state.annotations||[]).forEach((a,i)=>{try{const tip=coords(a.tip),label=coords(a.label);const arrowParts=annotationGeometry(a.tip,a.label);L.polyline(arrowParts.shaft.map(coords),{color:'#f8df65',weight:3,interactive:false}).addTo(annotationLayer);arrowParts.head.forEach(seg=>L.polyline(seg.map(coords),{color:'#f8df65',weight:3,interactive:false}).addTo(annotationLayer));const lm=L.marker(label,{icon:L.divIcon({className:'',html:map.getZoom()<14?'':`<div class="annotation-label" style="${map.getZoom()<16?'transform:scale(.55);transform-origin:top left;':''}">${esc(a.text)}</div>`,iconSize:[0,0],iconAnchor:[0,0]}),draggable:state.mode==='select'}).addTo(annotationLayer);lm.on('click',e=>{L.DomEvent.stopPropagation(e);if(state.mode==='delete')deleteItem('annotation',i);else if(state.mode==='select')editAnnotation(i)});lm.on('dragstart',remember);lm.on('dragend',e=>{try{a.label=toXY(e.target.getLatLng());render();persist()}catch(err){alert(err.message);render()}});const tm=L.marker(tip,{icon:L.divIcon({className:'',html:'<div class="annotation-target"></div>',iconSize:[12,12],iconAnchor:[6,6]}),draggable:state.mode==='select'}).addTo(annotationLayer);tm.on('click',e=>{L.DomEvent.stopPropagation(e);if(state.mode==='delete')deleteItem('annotation',i);else if(state.mode==='select')editAnnotation(i)});tm.on('dragstart',remember);tm.on('dragend',e=>{try{a.tip=toXY(e.target.getLatLng());render();persist()}catch(err){alert(err.message);render()}})}catch(e){console.warn('Annotation render:',e)}});if($('showAnnotations').checked)(state.dimensions||[]).forEach((d,i)=>{try{const g=dimGeometry(d);if(!g)return;const col='#36d9f3';L.polyline([coords(g.c),coords(g.e)],{color:col,weight:2,interactive:false}).addTo(annotationLayer);g.extensions.forEach(seg=>L.polyline(seg.map(coords),{color:col,weight:1.5,interactive:false}).addTo(annotationLayer));const arrowLen=Math.min(g.len*.14,Math.max(g.len*.035,3));const ux=(g.e.e-g.c.e)/g.len,uy=(g.e.n-g.c.n)/g.len;for(const [tip,dir] of [[g.c,1],[g.e,-1]]){const back={e:tip.e+ux*arrowLen*dir,n:tip.n+uy*arrowLen*dir};for(const sign of [-1,1]){L.polyline([coords(tip),coords({e:back.e-uy*arrowLen*.25*sign,n:back.n+ux*arrowLen*.25*sign})],{color:col,weight:2,interactive:false}).addTo(annotationLayer)}}const label=map.getZoom()>=17?L.marker(coords(g.mid),{icon:dimensionLabelIcon(d,g),draggable:state.mode==='select'}).addTo(annotationLayer):null;if(label){label.on('click',e=>{L.DomEvent.stopPropagation(e);if(state.mode==='delete')deleteItem('dimension',i);else if(state.mode==='select'){const prefix=prompt('Dimension text prefix (optional)',d.prefix||'');if(prefix!==null){remember();d.prefix=prefix;render();persist()}}});label.on('dragstart',remember);label.on('dragend',e=>{try{d.offset=dimOffset(d.a,d.b,toXY(e.target.getLatLng()));render();persist()}catch(err){alert(err.message);render()}});}if(map.getZoom()>=16)for(const key of ['a','b']){const marker=L.marker(coords(d[key]),{icon:L.divIcon({className:'',html:'<div class="dimension-handle"></div>',iconSize:[13,13],iconAnchor:[6,6]}),draggable:state.mode==='select'}).addTo(annotationLayer);marker.on('click',e=>{L.DomEvent.stopPropagation(e);if(state.mode==='delete')deleteItem('dimension',i)});marker.on('dragstart',remember);marker.on('dragend',e=>{try{d[key]=toXY(e.target.getLatLng());render();persist()}catch(err){alert(err.message);render()}})}}catch(e){console.warn('Dimension render:',e)}});if(state.dimensionStart?.length){state.dimensionStart.forEach(p=>L.circleMarker(coords(p),{radius:5,color:'#36d9f3'}).addTo(drawLayer));if(state.dimensionStart.length===2){L.polyline(state.dimensionStart.map(coords),{color:'#36d9f3',dashArray:'4 4',interactive:false}).addTo(drawLayer);renderDimensionPreview()}};if(state.annotationStart){L.circleMarker(coords(state.annotationStart),{radius:5,color:'#f8df65'}).addTo(drawLayer)};if(state.drawing.length)L.polyline(state.drawing.map(coords),{color:'#a5ff89',dashArray:'5 5'}).addTo(drawLayer);$('measure').textContent=state.cl.length>1?'CL: '+length(state.cl).toFixed(2)+' CRS units':'CL: —';renderStationingOverlay()}
+ }}).addTo(refLayer);L.geoJSON(g,{filter:f=>f.properties?._kmzHidden!==true&&/LineString/.test(f.geometry?.type||''),style:()=>({color:'#ffffff',weight:24,opacity:0.001,interactive:true}),onEachFeature:(f,hit)=>hit.on('click',e=>{L.DomEvent.stopPropagation(e);if(state.mode==='delete')deleteGISFeature(gi,f);else if(state.mode==='select'){if(Date.now()>=suppressTapUntil)showAttributes(f,e.latlng);}else routeImportedFeatureClick(f,e)})}).addTo(refLayer)}catch(e){console.warn('GIS rendering',e)}});showKMZPIs();if($('showAnnotations').checked)(state.annotations||[]).forEach((a,i)=>{try{const tip=coords(a.tip),label=coords(a.label);const arrowParts=annotationGeometry(a.tip,a.label);L.polyline(arrowParts.shaft.map(coords),{color:'#f8df65',weight:3,interactive:false}).addTo(annotationLayer);arrowParts.head.forEach(seg=>L.polyline(seg.map(coords),{color:'#f8df65',weight:3,interactive:false}).addTo(annotationLayer));const lm=L.marker(label,{icon:L.divIcon({className:'',html:map.getZoom()<14?'':`<div class="annotation-label" style="${map.getZoom()<16?'transform:scale(.55);transform-origin:top left;':''}">${esc(a.text)}</div>`,iconSize:[0,0],iconAnchor:[0,0]}),draggable:state.mode==='select'}).addTo(annotationLayer);lm.on('click',e=>{L.DomEvent.stopPropagation(e);if(state.mode==='delete')deleteItem('annotation',i);else if(state.mode==='select')editAnnotation(i)});lm.on('dragstart',remember);lm.on('dragend',e=>{try{a.label=toXY(e.target.getLatLng());render();persist()}catch(err){alert(err.message);render()}});const tm=L.marker(tip,{icon:L.divIcon({className:'',html:'<div class="annotation-target"></div>',iconSize:[12,12],iconAnchor:[6,6]}),draggable:state.mode==='select'}).addTo(annotationLayer);tm.on('click',e=>{L.DomEvent.stopPropagation(e);if(state.mode==='delete')deleteItem('annotation',i);else if(state.mode==='select')editAnnotation(i)});tm.on('dragstart',remember);tm.on('dragend',e=>{try{a.tip=toXY(e.target.getLatLng());render();persist()}catch(err){alert(err.message);render()}})}catch(e){console.warn('Annotation render:',e)}});if($('showAnnotations').checked)(state.dimensions||[]).forEach((d,i)=>{try{const g=dimGeometry(d);if(!g)return;const col='#36d9f3';L.polyline([coords(g.c),coords(g.e)],{color:col,weight:2,interactive:false}).addTo(annotationLayer);g.extensions.forEach(seg=>L.polyline(seg.map(coords),{color:col,weight:1.5,interactive:false}).addTo(annotationLayer));const arrowLen=Math.min(g.len*.14,Math.max(g.len*.035,3));const ux=(g.e.e-g.c.e)/g.len,uy=(g.e.n-g.c.n)/g.len;for(const [tip,dir] of [[g.c,1],[g.e,-1]]){const back={e:tip.e+ux*arrowLen*dir,n:tip.n+uy*arrowLen*dir};for(const sign of [-1,1]){L.polyline([coords(tip),coords({e:back.e-uy*arrowLen*.25*sign,n:back.n+ux*arrowLen*.25*sign})],{color:col,weight:2,interactive:false}).addTo(annotationLayer)}}const label=map.getZoom()>=17?L.marker(coords(g.mid),{icon:dimensionLabelIcon(d,g),draggable:state.mode==='select'}).addTo(annotationLayer):null;if(label){label.on('click',e=>{L.DomEvent.stopPropagation(e);if(state.mode==='delete')deleteItem('dimension',i);else if(state.mode==='select'){const prefix=prompt('Dimension text prefix (optional)',d.prefix||'');if(prefix!==null){remember();d.prefix=prefix;render();persist()}}});label.on('dragstart',remember);label.on('dragend',e=>{try{d.offset=dimOffset(d.a,d.b,toXY(e.target.getLatLng()));render();persist()}catch(err){alert(err.message);render()}});}if(map.getZoom()>=16)for(const key of ['a','b']){const marker=L.marker(coords(d[key]),{icon:L.divIcon({className:'',html:'<div class="dimension-handle"></div>',iconSize:[13,13],iconAnchor:[6,6]}),draggable:state.mode==='select'}).addTo(annotationLayer);marker.on('click',e=>{L.DomEvent.stopPropagation(e);if(state.mode==='delete')deleteItem('dimension',i)});marker.on('dragstart',remember);marker.on('dragend',e=>{try{d[key]=toXY(e.target.getLatLng());render();persist()}catch(err){alert(err.message);render()}})}}catch(e){console.warn('Dimension render:',e)}});if(state.dimensionStart?.length){state.dimensionStart.forEach(p=>L.circleMarker(coords(p),{radius:5,color:'#36d9f3'}).addTo(drawLayer));if(state.dimensionStart.length===2){L.polyline(state.dimensionStart.map(coords),{color:'#36d9f3',dashArray:'4 4',interactive:false}).addTo(drawLayer);renderDimensionPreview()}};if(state.annotationStart){L.circleMarker(coords(state.annotationStart),{radius:5,color:'#f8df65'}).addTo(drawLayer)};if(state.drawing.length)L.polyline(state.drawing.map(coords),{color:'#a5ff89',dashArray:'5 5'}).addTo(drawLayer);$('measure').textContent=state.cl.length>1?'CL: '+length(state.cl).toFixed(2)+' CRS units':'CL: —';renderStationingOverlay()}
 function insertOnLine(line,latlng,label){try{if(line.length<2)throw Error('Line requires two vertices');const q=toXY(latlng);let best=null;for(let i=0;i<line.length-1;i++){const a=line[i],b=line[i+1],dx=b.e-a.e,dy=b.n-a.n,den=dx*dx+dy*dy;if(!den)continue;const t=Math.max(0,Math.min(1,((q.e-a.e)*dx+(q.n-a.n)*dy)/den));const pt={e:a.e+t*dx,n:a.n+t*dy};const d=map.latLngToContainerPoint(latlng).distanceTo(map.latLngToContainerPoint(toLL(pt)));if(!best||d<best.d)best={i,pt,d,t}}if(!best||best.d>35)throw Error('Tap within 35 pixels of a segment');if(best.t<0.000001||best.t>0.999999)throw Error('Too close to an existing vertex. Switch to Select / Drag to move it.');remember();line.splice(best.i+1,0,best.pt);if(line===state.cl)shiftEquations(best.i+1);render();persist();status(`Inserted snapped vertex on ${label}. Choose Select / Drag to reposition.`)}catch(e){alert(e.message)}}
 function insertKMZVertex(feature,latlng){
  try{
