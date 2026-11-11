@@ -99,16 +99,7 @@ function refreshImportedLayersUI(){
   const remove=document.createElement('button');remove.type='button';remove.className='btn';remove.textContent='Delete file';remove.style.cssText='width:auto;padding:6px 9px;color:#ffb5b5';
   remove.onclick=()=>{if(!confirm('Remove '+(geo._sourceName||'this imported file')+' and its layers from this project?'))return;remember();state.reference.splice(i,1);kmzSelectedCL=null;render();persist()};
   actions.append(fileVisible,fileLabel,remove);file.append(actions);
-  for(const [name,items] of groups){
-   const line=document.createElement('div');line.className='tt-kmz-layer';
-   const visible=document.createElement('input');visible.type='checkbox';visible.checked=items.some(f=>f.properties?._kmzHidden!==true);visible.title='Show / hide '+name;
-   visible.onchange=()=>{remember();for(const f of items){f.properties=f.properties||{};f.properties._kmzHidden=!visible.checked}render();persist()};
-   const title=document.createElement('span');title.textContent=name+' ('+items.length+')';title.title=name;
-   const color=document.createElement('input');color.type='color';const sample=items[0]?.properties||{};
-   const hex=sample._fillColor||sample._color||'#28c72e';color.value=/^#[0-9a-f]{6}$/i.test(hex)?hex:'#28c72e';color.title='Recolor '+name;
-   color.onchange=()=>{remember();for(const f of items){f.properties=f.properties||{};f.properties._color=color.value;f.properties._fillColor=color.value}render();persist();status('KMZ layer recolored: '+name)};
-   line.append(visible,title,color);file.append(line);
-  }
+  const hint=document.createElement('div');hint.className='note';hint.textContent='Right-click a KMZ feature on Windows, or press and hold it on iPad, to change its color. Tap normally to inspect attributes.';file.append(hint);
   container.append(file);
  });
 }
@@ -139,13 +130,43 @@ function setupPolygonHold(){
   }
   return null;
  };
+ const pickFeature=screen=>{
+  if(!$('showRef').checked)return null;
+  const latlng=map.containerPointToLatLng(screen),point=turf.point([latlng.lng,latlng.lat]);
+  const nearSegment=(a,b)=>{const x=b.x-a.x,y=b.y-a.y,den=x*x+y*y||1,t=Math.max(0,Math.min(1,((screen.x-a.x)*x+(screen.y-a.y)*y)/den));return Math.hypot(screen.x-a.x-t*x,screen.y-a.y-t*y)};
+  let best=null,bestDist=18;
+  for(let gi=state.reference.length-1;gi>=0;gi--){
+   const collection=state.reference[gi];if(collection._visible===false)continue;
+   const fs=collection.type==='FeatureCollection'?(collection.features||[]):collection.type==='Feature'?[collection]:[];
+   for(let fi=fs.length-1;fi>=0;fi--){
+    const f=fs[fi],g=f.geometry;if(!g||f.properties?._kmzHidden===true)continue;
+    if(/Polygon/.test(g.type)){try{if(turf.booleanPointInPolygon(point,f))return f}catch(e){}continue}
+    let lines=[];
+    if(g.type==='LineString')lines=[g.coordinates];
+    else if(g.type==='MultiLineString')lines=g.coordinates;
+    else if(g.type==='Point')lines=[[g.coordinates]];
+    else if(g.type==='MultiPoint')lines=g.coordinates.map(c=>[c]);
+    for(const line of lines){
+     const pts=line.map(c=>map.latLngToContainerPoint([c[1],c[0]]));
+     for(let j=0;j<pts.length;j++){
+      const d=j?nearSegment(pts[j-1],pts[j]):Math.hypot(screen.x-pts[j].x,screen.y-pts[j].y);
+      if(d<bestDist){best=f;bestDist=d}
+     }
+    }
+   }
+  }
+  return best;
+ };
  const edit=f=>{
   const p=f.properties||(f.properties={});
-  $('modalTitle').textContent='POLYGON COLOR — '+(p.name||'Imported polygon');
-  const current=p._fillColor||p._color||'#d2a9ff';
-  $('modalBody').innerHTML='<label>Polygon fill color</label><input type="color" id="polygonColor" value="'+(/^#[0-9a-f]{6}$/i.test(current)?current:'#d2a9ff')+'" style="width:100%;height:52px;background:#132331;border:1px solid #406073"><p class="note">The polygon remains a polygon. This color is saved with the project and included in KMZ export. Nearby lines retain tap priority.</p>';
+  const isPolygon=/Polygon/.test(f.geometry?.type||'');
+  const name=p.name||p.Name||p.CAD_LAYER||p._kmzLayer||'KMZ feature';
+  $('modalTitle').textContent='KMZ COLOR — '+name;
+  const current=p._fillColor||p._color||'#28c72e';
+  const hex=/^#[0-9a-f]{6}$/i.test(current)?current:'#28c72e';
+  $('modalBody').innerHTML='<label>Feature color</label><input type="color" id="kmzFeatureColor" value="'+hex+'" style="width:100%;height:52px;background:#132331;border:1px solid #406073"><p class="note">Changes this feature only, not the whole imported layer. Original KMZ attributes remain intact.</p>';
   $('modalOK').style.display='';
-  $('modalOK').onclick=()=>{remember();p._fillColor=$('polygonColor').value;p._fillOpacity=Math.max(0.45,p._fillOpacity??0.45);render();persist();closeModal();status('Polygon color updated')};
+  $('modalOK').onclick=()=>{remember();p._color=$('kmzFeatureColor').value;if(isPolygon){p._fillColor=p._color;p._fillOpacity=Math.max(.45,p._fillOpacity??.45)}render();persist();closeModal();status('KMZ feature color updated')};
   $('modalbg').classList.add('show');
  };
 
@@ -189,10 +210,10 @@ function setupPolygonHold(){
   L.popup({maxWidth:320,autoPan:true}).setLatLng(position).setContent(html).openOn(map);
  };
  map.on('click',e=>{if(state.mode!=='select'||Date.now()<suppressTapUntil)return;const f=pickPolygon(map.latLngToContainerPoint(e.latlng));if(f)showAttributes(f,e.latlng)});
- el.addEventListener('pointerdown',e=>{cancel();triggered=false;if(state.mode!=='select'||e.pointerType!=='touch'||!e.isPrimary)return;origin={x:e.clientX,y:e.clientY};const box=el.getBoundingClientRect(),pos=L.point(e.clientX-box.left,e.clientY-box.top);timer=setTimeout(()=>{timer=null;const f=pickPolygon(pos);if(f){triggered=true;suppressTapUntil=Date.now()+900;map.closePopup();edit(f)}},650)},{passive:true});
+ el.addEventListener('pointerdown',e=>{cancel();triggered=false;if(state.mode!=='select'||e.pointerType!=='touch'||!e.isPrimary)return;origin={x:e.clientX,y:e.clientY};const box=el.getBoundingClientRect(),pos=L.point(e.clientX-box.left,e.clientY-box.top);timer=setTimeout(()=>{timer=null;const f=pickFeature(pos);if(f){triggered=true;suppressTapUntil=Date.now()+900;map.closePopup();edit(f)}},650)},{passive:true});
  el.addEventListener('pointermove',e=>{if(origin&&Math.hypot(e.clientX-origin.x,e.clientY-origin.y)>11)cancel()},{passive:true});
  el.addEventListener('pointerup',cancel,{passive:true});el.addEventListener('pointercancel',cancel,{passive:true});
- el.addEventListener('contextmenu',e=>{if(state.mode!=='select')return;const box=el.getBoundingClientRect(),f=pickPolygon(L.point(e.clientX-box.left,e.clientY-box.top));if(f){e.preventDefault();cancel();suppressTapUntil=Date.now()+900;map.closePopup();edit(f)}});
+ el.addEventListener('contextmenu',e=>{if(state.mode!=='select')return;const box=el.getBoundingClientRect(),f=pickFeature(L.point(e.clientX-box.left,e.clientY-box.top));if(f){e.preventDefault();cancel();suppressTapUntil=Date.now()+900;map.closePopup();edit(f)}});
 }
 function render(){refreshImportedLayersUI();for(const collection of state.reference){const fs=collection.type==='FeatureCollection'?collection.features:collection.type==='Feature'?[collection]:[];for(const f of fs){if(/Polygon/.test(f.geometry?.type||'')&&f.properties?._fillColor==='#d2a9ff'&&f.properties?._color==='#d2a9ff'){f.properties._fillColor='#28c72e';f.properties._color='#111111';f.properties._fillOpacity=0.5;}}}if(kmzPILayer)kmzPILayer.clearLayers();for(const g of [originalLayer,clLayer,vertexLayer,pointLayer,photoLayer,lineLayer,refLayer,drawLayer,annotationLayer])g.clearLayers();if($('showOriginal').checked&&state.original.length>1)L.polyline(state.original.map(coords),{color:'#f3a65b',weight:3,dashArray:'9 7'}).addTo(originalLayer);if($('showCad').checked){if(state.cl.length>1){const clObj=L.polyline(state.cl.map(coords),{color:'#1be7ff',weight:4}).addTo(clLayer);clObj.on('click',e=>{if(isCADTransformMode(state.mode)){L.DomEvent.stopPropagation(e);handleCADObjectSelection({type:'cl'},e.latlng);return}if(state.mode==='stationPick'){L.DomEvent.stopPropagation(e);selectStationingSource({type:'cl',name:'Edited centerline'},e.latlng);return}if(state.mode==='inverse'||state.mode==='annotation'){L.DomEvent.stopPropagation(e);onMapClick(e);return}if(state.mode==='gisPickLine'){L.DomEvent.stopPropagation(e);chooseGISRoute(state.cl.map(coords));return}if(state.mode==='dimension'){L.DomEvent.stopPropagation(e);dimensionPick(e.latlng);return}if(state.mode==='editLine'){L.DomEvent.stopPropagation(e);insertOnLine(state.cl,e.latlng,'centerline')}else if(state.mode==='trim'){L.DomEvent.stopPropagation(e);trimLineClick('cl',e.latlng)}})}if(state.mode!=='trim'&&$('showVertices').checked)state.cl.forEach((p,i)=>{const m=L.marker(coords(p),{icon:icon('vertex'),draggable:state.mode==='select'}).addTo(vertexLayer);m.bindTooltip(`CL ${i+1}`,{direction:'top'});if((state.stationEquations||[]).some(eq=>eq.vertex===i))m.bindTooltip(`CL ${i+1} · STATION EQUATION`,{direction:'top'});m.on('click',e=>{if(state.mode==='stationPick'){L.DomEvent.stopPropagation(e);selectStationingSource({type:'cl',name:'Edited centerline'},e.latlng);return}if(state.mode==='inverse'||state.mode==='annotation'){L.DomEvent.stopPropagation(e);onMapClick(e);return}if(state.mode==='dimension'){L.DomEvent.stopPropagation(e);dimensionPick(e.latlng);return}if(state.mode==='stationEquation'){L.DomEvent.stopPropagation(e);editStationEquation(i)}else if(state.mode==='delete'){L.DomEvent.stopPropagation(e);deleteItem('CL vertex',i)}});m.on('dragstart',remember);m.on('dragend',e=>{try{state.cl[i]=toXY(snapCADLatLng(e.target.getLatLng(),{type:'cl',index:i}));render();persist()}catch(err){alert(err.message);render()}})});state.lines.forEach((line,i)=>{if(line.length>1){const obj=L.polyline(line.map(coords),{color:state.trimTarget==='cad:'+i?'#ffcf66':state.selectedLine===i?'#ffcf66':'#77f39b',weight:state.trimTarget==='cad:'+i||state.selectedLine===i?6:4}).addTo(lineLayer);obj.on('click',e=>{if(isCADTransformMode(state.mode)){L.DomEvent.stopPropagation(e);handleCADObjectSelection({type:'line',index:i},e.latlng);return}if(state.mode==='stationPick'){L.DomEvent.stopPropagation(e);selectStationingSource({type:'cad',index:i,name:'CAD line '+(i+1)},e.latlng);return}if(state.mode==='inverse'||state.mode==='annotation'){L.DomEvent.stopPropagation(e);onMapClick(e);return}if(state.mode==='gisPickLine'){L.DomEvent.stopPropagation(e);chooseGISRoute(line.map(coords));return}if(state.mode==='dimension'){L.DomEvent.stopPropagation(e);dimensionPick(e.latlng);return}if(state.mode==='delete'){L.DomEvent.stopPropagation(e);deleteItem('CAD line',i)}else if(state.mode==='editLine'){L.DomEvent.stopPropagation(e);insertOnLine(state.lines[i],e.latlng,`CAD line ${i+1}`)}else if(state.mode==='trim'){L.DomEvent.stopPropagation(e);trimLineClick('cad:'+i,e.latlng)}else if(state.mode==='offset'){L.DomEvent.stopPropagation(e);cadLineClick(i,e.latlng)}})}if(state.mode!=='trim'&&$('showVertices').checked)line.forEach((p,j)=>{const vm=L.marker(coords(p),{icon:icon('vertex'),draggable:state.mode==='select'}).addTo(vertexLayer);vm.bindTooltip(`Line ${i+1} · ${j+1}`);vm.on('click',e=>{if(state.mode==='stationPick'){L.DomEvent.stopPropagation(e);selectStationingSource({type:'cad',index:i,name:'CAD line '+(i+1)},e.latlng);return}if(state.mode==='inverse'||state.mode==='annotation'){L.DomEvent.stopPropagation(e);onMapClick(e);return}if(state.mode==='dimension'){L.DomEvent.stopPropagation(e);dimensionPick(e.latlng);return}if(state.mode==='delete'){L.DomEvent.stopPropagation(e);deleteItem('line vertex',i,j)}});vm.on('dragstart',remember);vm.on('dragend',e=>{try{state.lines[i][j]=toXY(snapCADLatLng(e.target.getLatLng(),{type:'line',line:i,index:j}));render();persist()}catch(err){alert(err.message);render()}})})});state.points.forEach((p,i)=>{const m=L.marker(coords(p),{icon:icon('cadpin'),draggable:state.mode==='select'}).addTo(pointLayer);m.bindPopup(`<b>${esc(p.name)}</b><p><button onclick="window.vectorEditPoint(${i})">Rename CAD point</button></p>`);m.on('click',e=>{if(state.mode==='inverse'||state.mode==='annotation'){L.DomEvent.stopPropagation(e);onMapClick(e);return}if(state.mode==='dimension'){L.DomEvent.stopPropagation(e);dimensionPick(e.latlng);return}if(state.mode==='delete'){L.DomEvent.stopPropagation(e);deleteItem('CAD point',i)}});m.on('dragstart',remember);m.on('dragend',e=>{try{Object.assign(p,toXY(e.target.getLatLng()));render();persist()}catch(err){alert(err.message);render()}})});state.photos.forEach((p,i)=>{const m=L.marker(coords(p),{icon:photoPriorityIcon(p.priority),draggable:state.mode==='select'}).addTo(photoLayer);m.bindPopup(`<b>${esc(p.name)}</b><p><b>Priority: ${esc(priorityLabel(p.priority))}</b></p><p>${esc(p.note||'')}</p>${p.image?`<img src="${p.image}" style="max-width:200px;max-height:160px">`:''}<p><button onclick="window.vectorEditPhoto(${i})">Edit photo pin</button></p>`);m.on('click',e=>{if(state.mode==='inverse'||state.mode==='annotation'){L.DomEvent.stopPropagation(e);onMapClick(e);return}if(state.mode==='dimension'){L.DomEvent.stopPropagation(e);dimensionPick(e.latlng);return}if(state.mode==='delete'){L.DomEvent.stopPropagation(e);deleteItem('photo pin',i)}});m.on('dragstart',remember);m.on('dragend',e=>{try{Object.assign(p,toXY(e.target.getLatLng()));render();persist()}catch(err){alert(err.message);render()}})})}if($('showRef').checked)state.reference.forEach((g,gi)=>{if(g._visible===false)return;try{L.geoJSON(g,{filter:f=>f.properties?._kmzHidden!==true,style:f=>{const p=f.properties||{},polygon=/Polygon/.test(f.geometry?.type||'');return {color:p._color||'#d2a9ff',weight:polygon?Math.max(1,Number(p._width)||2):Math.max(4,Number(p._width)||3),opacity:p._outlineEnabled===false?0:(p._strokeOpacity??1),fillColor:p._fillColor||p._color||'#d2a9ff',fillOpacity:polygon?(p._fillEnabled===false?0:(p._fillOpacity??0.3)):0,interactive:!polygon}},pointToLayer:(f,ll)=>L.circleMarker(ll,{radius:5,color:f.properties?._color||'#d2a9ff'}),onEachFeature:(f,layer)=>{
  // No automatic KML/GIS information popup: command clicks must reach the active tool.
