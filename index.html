@@ -99,6 +99,38 @@ function refreshImportedLayersUI(){
 }
 
 let ttPickImportedFeature=null,ttShowImportedAttributes=null,ttImportedTapSuppressed=()=>false;
+
+ // Shared by KMZ import and attribute popups.
+ function cleanKMZAttributes(properties){
+  const result={};
+  const p=properties||{};
+  const raw=Object.entries(p).find(([k])=>k.toLowerCase()==='description')?.[1];
+  if(typeof raw==='string'&&raw.trim()){
+   const doc=new DOMParser().parseFromString(raw,'text/html');
+   for(const tr of doc.querySelectorAll('tr')){
+    const cells=Array.from(tr.children).filter(el=>/^(TH|TD)$/i.test(el.tagName));
+    if(cells.length>=2){
+     const key=cells[0].textContent.trim().replace(/\s+/g,' ');
+     const value=cells.slice(1).map(c=>c.textContent.trim()).join(' ').trim();
+     if(key&&key.toLowerCase()!=='description'&&value&&!result[key])result[key]=value;
+    }
+   }
+   // Also support KMZ descriptions containing simple "Field: Value" lines.
+   if(!Object.keys(result).length){
+    const plain=doc.body.textContent||'';
+    for(const line of plain.split(/\r?\n/)){
+     const m=line.trim().match(/^([^:]{1,70}):\s*(.+)$/);
+     if(m&&m[1].toLowerCase()!=='description')result[m[1].trim()]=m[2].trim();
+    }
+   }
+  }
+  for(const [key,value] of Object.entries(p)){
+   if(key.startsWith('_')||key.toLowerCase()==='description'||value==null||String(value).trim()==='')continue;
+   result[key]=value;
+  }
+  return result;
+ }
+
 function setupPolygonHold(){
  const el=map.getContainer();let timer=null,origin=null,triggered=false,suppressTapUntil=0;
  const cancel=()=>{clearTimeout(timer);timer=null};
@@ -186,35 +218,6 @@ function setupPolygonHold(){
   $('modalbg').classList.add('show');
  };
 
- function cleanKMZAttributes(properties){
-  const result={};
-  const p=properties||{};
-  const raw=Object.entries(p).find(([k])=>k.toLowerCase()==='description')?.[1];
-  if(typeof raw==='string'&&raw.trim()){
-   const doc=new DOMParser().parseFromString(raw,'text/html');
-   for(const tr of doc.querySelectorAll('tr')){
-    const cells=Array.from(tr.children).filter(el=>/^(TH|TD)$/i.test(el.tagName));
-    if(cells.length>=2){
-     const key=cells[0].textContent.trim().replace(/\s+/g,' ');
-     const value=cells.slice(1).map(c=>c.textContent.trim()).join(' ').trim();
-     if(key&&key.toLowerCase()!=='description'&&value&&!result[key])result[key]=value;
-    }
-   }
-   // Also support KMZ descriptions containing simple "Field: Value" lines.
-   if(!Object.keys(result).length){
-    const plain=doc.body.textContent||'';
-    for(const line of plain.split(/\r?\n/)){
-     const m=line.trim().match(/^([^:]{1,70}):\s*(.+)$/);
-     if(m&&m[1].toLowerCase()!=='description')result[m[1].trim()]=m[2].trim();
-    }
-   }
-  }
-  for(const [key,value] of Object.entries(p)){
-   if(key.startsWith('_')||key.toLowerCase()==='description'||value==null||String(value).trim()==='')continue;
-   result[key]=value;
-  }
-  return result;
- }
  function kmzAttributeRows(properties){
   return Object.entries(cleanKMZAttributes(properties)).filter(([k])=>k.toLowerCase()!=='name');
  }
