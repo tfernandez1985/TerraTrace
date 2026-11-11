@@ -135,9 +135,42 @@ function setupPolygonHold(){
   $('modalOK').onclick=()=>{remember();p._fillColor=$('polygonColor').value;p._fillOpacity=Math.max(0.45,p._fillOpacity??0.45);render();persist();closeModal();status('Polygon color updated')};
   $('modalbg').classList.add('show');
  };
+
+ function cleanKMZAttributes(properties){
+  const result={};
+  const p=properties||{};
+  const raw=Object.entries(p).find(([k])=>k.toLowerCase()==='description')?.[1];
+  if(typeof raw==='string'&&raw.trim()){
+   const doc=new DOMParser().parseFromString(raw,'text/html');
+   for(const tr of doc.querySelectorAll('tr')){
+    const cells=Array.from(tr.children).filter(el=>/^(TH|TD)$/i.test(el.tagName));
+    if(cells.length>=2){
+     const key=cells[0].textContent.trim().replace(/\s+/g,' ');
+     const value=cells.slice(1).map(c=>c.textContent.trim()).join(' ').trim();
+     if(key&&key.toLowerCase()!=='description'&&value&&!result[key])result[key]=value;
+    }
+   }
+   // Also support KMZ descriptions containing simple "Field: Value" lines.
+   if(!Object.keys(result).length){
+    const plain=doc.body.textContent||'';
+    for(const line of plain.split(/\r?\n/)){
+     const m=line.trim().match(/^([^:]{1,70}):\s*(.+)$/);
+     if(m&&m[1].toLowerCase()!=='description')result[m[1].trim()]=m[2].trim();
+    }
+   }
+  }
+  for(const [key,value] of Object.entries(p)){
+   if(key.startsWith('_')||key.toLowerCase()==='description'||value==null||String(value).trim()==='')continue;
+   result[key]=value;
+  }
+  return result;
+ }
+ function kmzAttributeRows(properties){
+  return Object.entries(cleanKMZAttributes(properties)).filter(([k])=>k.toLowerCase()!=='name');
+ }
  const showAttributes=(f,position)=>{
   const p=f.properties||{},name=p.name||p.Name||'Imported polygon';
-  const rows=Object.entries(p).filter(([key,value])=>!key.startsWith('_')&&key!=='name'&&key!=='Name'&&value!==null&&value!==undefined&&String(value).trim());
+  const rows=kmzAttributeRows(p);
   const details=rows.map(([key,value])=>'<div style="padding:5px 0;border-bottom:1px solid #52616a55"><b>'+esc(key)+'</b><div style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(typeof value==='object'?JSON.stringify(value):String(value))+'</div></div>').join('');
   const html='<div style="min-width:200px;max-width:290px;max-height:300px;overflow:auto;color:#1b2630"><b style="font-size:15px">'+esc(name)+'</b><div style="margin-top:8px">'+(details||'No additional attributes in this file.')+'</div><small style="display:block;margin-top:10px;color:#52616a">Press and hold polygon to change its color.</small></div>';
   L.popup({maxWidth:320,autoPan:true}).setLatLng(position).setContent(html).openOn(map);
@@ -192,10 +225,7 @@ function routeImportedFeatureClick(f,e){
  if(m==='select'&&isLine){
   const properties=f.properties||{};
   const label=properties.name||properties.Name||properties.NAME||'Imported KMZ Line';
-  const rows=Object.entries(properties).filter(([key,value])=>
-   !key.startsWith('_')&&key.toLowerCase()!=='description'&&
-   key.toLowerCase()!=='name'&&value!==null&&value!==undefined&&
-   String(value).trim()!=='');
+  const rows=kmzAttributeRows(properties);
   const details=rows.map(([key,value])=>
    '<div style="padding:6px 0;border-bottom:1px solid #52616a55"><b>'+esc(key)+
    '</b><div style="overflow-wrap:anywhere;white-space:pre-wrap">'+
@@ -612,6 +642,9 @@ function parseStyledKML(source){
   }
   const layerName=folders.join(' / ')||'Unfiled';
   const properties={_kmzLayer:layerName,name:child(pm,'name')?.textContent||'KML Feature',_color:stroke?.color||'#111111',_width:width,_fillColor:fill?.color||'#28c72e',_fillOpacity:fill?.opacity??0.5,_strokeOpacity:stroke?.opacity??1,_fillEnabled:child(poly||{},'fill')?.textContent.trim()!=='0',_outlineEnabled:child(poly||{},'outline')?.textContent.trim()!=='0'};
+  // Extract the attribute table from HTML descriptions before discarding markup.
+  const description=child(pm,'description')?.textContent||'';
+  Object.assign(properties,cleanKMZAttributes({description}));
   // Keep KML ExtendedData, including landowner names, tract IDs, acreage and descriptions.
   const extended=child(pm,'ExtendedData');
   if(extended){
