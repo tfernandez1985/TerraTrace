@@ -465,14 +465,25 @@ function ttNearestSegment(points,ll){
 function ttSelectOffset(points,ll,name){
  try{
   validCRS();if(points.length<2)throw Error('This line needs two vertices.');
-  const nearest=ttNearestSegment(points,ll);
+  // CAD/CL and imported KMZ renderers supply Leaflet [lat,lng] pairs;
+  // toXY requires a LatLng object with .lat and .lng properties.
+  const latlngs=points.map(p=>{
+   const v=Array.isArray(p)?L.latLng(Number(p[0]),Number(p[1])):
+     (p&&Number.isFinite(p.lat)&&Number.isFinite(p.lng)?L.latLng(p.lat,p.lng):
+     (p&&Number.isFinite(p.e)&&Number.isFinite(p.n)?L.latLng(coords(p)):null));
+   if(!v||!Number.isFinite(v.lat)||!Number.isFinite(v.lng))throw Error('Selected line contains invalid latitude/longitude coordinates.');
+   return v;
+  });
+  const nearest=ttNearestSegment(latlngs,ll);
   if(!nearest)throw Error('No valid segment found.');
-  ttOffsetSelection={a:toXY(points[nearest.i]),b:toXY(points[nearest.i+1]),name,index:nearest.i};
+  const a=toXY(latlngs[nearest.i]),b=toXY(latlngs[nearest.i+1]);
+  if(![a.e,a.n,b.e,b.n].every(Number.isFinite))throw Error('Could not project KMZ vertices into the selected project CRS.');
+  ttOffsetSelection={a,b,name,index:nearest.i};
   state.selectedLine=null;
   if(ttRubberBand){map.removeLayer(ttRubberBand);ttRubberBand=null}
-  ttRubberBand=L.polyline([points[nearest.i],points[nearest.i+1]],{color:'#ffdd52',weight:7,opacity:.9,interactive:false}).addTo(map);
+  ttRubberBand=L.polyline([latlngs[nearest.i],latlngs[nearest.i+1]],{color:'#ffdd52',weight:7,opacity:.9,interactive:false}).addTo(map);
   status('OFFSET: '+name+' segment '+(nearest.i+1)+' selected. Tap on the LEFT or RIGHT side.');
- }catch(err){alert(err.message)}
+ }catch(err){ttOffsetSelection=null;alert(err.message)}
 }
 function ttFinishOffset(ll){
  if(!ttOffsetSelection)return false;
@@ -484,7 +495,9 @@ function ttFinishOffset(ll){
   if(len<1e-8)throw Error('Selected segment is too short to offset.');
   const side=Math.sign(dx*(q.n-a.n)-dy*(q.e-a.e))||1;
   const nx=-dy/len*raw*side,ny=dx/len*raw*side;
-  remember();state.lines.push([{e:a.e+nx,n:a.n+ny},{e:b.e+nx,n:b.n+ny}]);
+  const start={e:a.e+nx,n:a.n+ny},end={e:b.e+nx,n:b.n+ny};
+  if(![start.e,start.n,end.e,end.n].every(Number.isFinite))throw Error('Offset produced invalid coordinates. Check the project CRS and selected KMZ segment.');
+  remember();state.lines.push([start,end]);
   ttOffsetSelection=null;if(ttRubberBand){map.removeLayer(ttRubberBand);ttRubberBand=null}
   render();persist();status('Offset '+dName+' segment '+raw+' CRS units. Original geometry unchanged.');
  }catch(err){alert(err.message)}
