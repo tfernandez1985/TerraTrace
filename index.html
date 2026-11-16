@@ -226,8 +226,8 @@ function setupPolygonHold(){
   const p=f.properties||{},name=p.name||p.Name||p.NAME||p.CAD_LAYER||'Imported KMZ feature';
   const rows=kmzAttributeRows(p);
   const details=rows.map(([key,value])=>'<div style="padding:5px 0;border-bottom:1px solid #52616a55"><b>'+esc(key)+'</b><div style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(typeof value==='object'?JSON.stringify(value):String(value))+'</div></div>').join('');
-  const html='<div style="min-width:200px;max-width:290px;max-height:300px;overflow:auto;color:#1b2630"><b style="font-size:15px">'+esc(name)+'</b><div style="margin-top:8px">'+(details||'No additional attributes in this file.')+'</div><small style="display:block;margin-top:10px;color:#52616a">Right-click or press and hold to change this feature color.</small></div>';
-  L.popup({maxWidth:320,autoPan:true}).setLatLng(position).setContent(html).openOn(map);
+  const html='<div style="min-width:520px;max-width:760px;max-height:420px;overflow:auto;color:#1b2630"><b style="font-size:15px">'+esc(name)+'</b><div style="margin-top:8px">'+(details||'No additional attributes in this file.')+'</div><small style="display:block;margin-top:10px;color:#52616a">Right-click or press and hold to change this feature color.</small></div>';
+  L.popup({maxWidth:800,autoPan:true}).setLatLng(position).setContent(html).openOn(map);
  };
   ttPickImportedFeature=pickFeature;ttShowImportedAttributes=showAttributes;ttImportedTapSuppressed=()=>Date.now()<suppressTapUntil;
  map.on('click',e=>{if(state.mode!=='select'||Date.now()<suppressTapUntil)return;const f=pickFeature(map.latLngToContainerPoint(e.latlng));if(f)showAttributes(f,e.latlng)});
@@ -1101,7 +1101,7 @@ async function exportKMZ(){
      `<Data name="${xml(key)}"><value>${xml(value)}</value></Data>`).join('')+'</ExtendedData>':'';
     const attributeTable=attributeEntries.map(([key,value])=>
      `<tr><th style="text-align:left;padding:5px 10px 5px 4px;vertical-align:top;border-bottom:1px solid #ddd">${xml(key)}</th><td style="padding:5px 4px;border-bottom:1px solid #ddd;white-space:pre-wrap">${xml(value).replace(/]]>/g,']]&gt;')}</td></tr>`).join('');
-    const popupDescription=attributeTable?`<description><![CDATA[<div style="font-family:Arial,sans-serif"><h3>${xml(name)}</h3><table style="border-collapse:collapse">${attributeTable}</table></div>]]></description>`:'';
+    const popupDescription=attributeTable?`<description><![CDATA[<div style="font-family:Arial,sans-serif;min-width:760px;max-width:980px;max-height:430px;overflow:auto"><h3>${xml(name)}</h3><table style="border-collapse:collapse;width:100%;table-layout:auto">${attributeTable}</table></div>]]></description>`:'';
     parts.push(`<Placemark><name>${xml(name)}</name>${popupDescription}${extendedData}<Style><LineStyle><color>${color}</color><width>${width}</width></LineStyle><PolyStyle><color>${Math.round(Math.max(0,Math.min(1,prop._fillOpacity??0.3))*255).toString(16).padStart(2,'0')+kmlColorFromHex(prop._fillColor||prop._color||'#d2a9ff').slice(2)}</color><fill>${prop._fillEnabled===false?0:1}</fill><outline>${prop._outlineEnabled===false?0:1}</outline></PolyStyle><IconStyle><scale>0.45</scale><Icon><href>icons/cadPoint.png</href></Icon></IconStyle><LabelStyle><scale>0</scale></LabelStyle></Style>${geom}</Placemark>`);
    });
    closeCategory();
