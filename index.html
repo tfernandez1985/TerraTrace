@@ -1582,7 +1582,7 @@ window.gisFeatureInfo=(i,j)=>{const ref=state.reference[i],f=ref?.features?.[j]|
 // OWNERSHIP (LAND-SURVEY ONLY) — project-local state, included in the manual team-sync snapshot.
 const OWNERSHIP_FIELDS=['surveyPermission','negotiating','closed','paid','condemned'];
 const OWNERSHIP_LABELS=['Survey Permission','Negotiating','Closed','Paid','Condemned'];
-const OWNERSHIP_HEADERS=['Landowner','Parcel ID','Entry Station','Exit Station','Length (ft)','Entry Easting','Entry Northing','Exit Easting','Exit Northing','Rods',...OWNERSHIP_LABELS];
+const OWNERSHIP_HEADERS=['Landowner','Entry Station','Exit Station','Length (ft)','Rods',...OWNERSHIP_LABELS];
 let ownershipPicking=false,ownershipStartClick=null,ownershipLoading=false;
 const ownershipKey=f=>{
  const p=f.properties||{};
@@ -1658,13 +1658,13 @@ function ownershipRefresh(){
  const rows=state.ownershipRows||[];summary.textContent=`${rows.length} crossings · ${Object.keys(state.ownershipTracts||{}).length} tract statuses saved in project · sync to share`;
  host.replaceChildren();const frag=document.createDocumentFragment();
  rows.forEach((row,i)=>{const tr=document.createElement('tr'),f=ownershipFlags(row.key);tr.style.background=i%2?'#101d29':'#0b1622';
-  const fields=[row.owner,row.parcel,ownershipFormatStation(row.entry),ownershipFormatStation(row.exit),row.length.toFixed(2),row.entryE.toFixed(3),row.entryN.toFixed(3),row.exitE.toFixed(3),row.exitN.toFixed(3),row.rods.toFixed(2)];
+  const fields=[row.owner,ownershipFormatStation(row.entry),ownershipFormatStation(row.exit),row.length.toFixed(2),row.rods.toFixed(2)];
   for(const value of fields){const td=document.createElement('td');td.textContent=value;td.style.cssText='padding:7px 8px;border-bottom:1px solid #263d4d;white-space:nowrap';tr.append(td)}
   OWNERSHIP_FIELDS.forEach(field=>{const td=document.createElement('td');td.style.cssText='text-align:center;border-bottom:1px solid #263d4d;padding:5px';const input=document.createElement('input');input.type='checkbox';input.checked=!!f[field];input.setAttribute('aria-label',OWNERSHIP_LABELS[OWNERSHIP_FIELDS.indexOf(field)]+' for '+row.parcel);input.onchange=()=>{remember();state.ownershipTracts[row.key]={...ownershipFlags(row.key),[field]:input.checked};ownershipApplyColors();render();persist();ownershipRefresh()};td.append(input);tr.append(td)});
   tr.style.borderLeft='5px solid '+ownershipColor(f);frag.append(tr)});
  host.append(frag);
 }
-function ownershipCSV(){const rows=state.ownershipRows||[];if(!rows.length)return alert('Generate parcel stationing first.');const quote=v=>'"'+String(v??'').replace(/"/g,'""')+'"';const data=[OWNERSHIP_HEADERS,...rows.map(row=>{const flags=ownershipFlags(row.key);return [row.owner,row.parcel,ownershipFormatStation(row.entry),ownershipFormatStation(row.exit),row.length.toFixed(2),row.entryE.toFixed(3),row.entryN.toFixed(3),row.exitE.toFixed(3),row.exitN.toFixed(3),row.rods.toFixed(2),...OWNERSHIP_FIELDS.map(k=>flags[k]?'YES':'')];})].map(line=>line.map(quote).join(',')).join('\r\n');download(state.projectName.replace(/[^a-z0-9_-]/gi,'_')+'_OWNERSHIP_PARCEL_STATIONS.csv',new Blob(['\ufeff'+data],{type:'text/csv;charset=utf-8'}));}
+function ownershipCSV(){const rows=state.ownershipRows||[];if(!rows.length)return alert('Generate parcel stationing first.');const quote=v=>'"'+String(v??'').replace(/"/g,'""')+'"';const data=[OWNERSHIP_HEADERS,...rows.map(row=>{const flags=ownershipFlags(row.key);return [row.owner,ownershipFormatStation(row.entry),ownershipFormatStation(row.exit),row.length.toFixed(2),row.rods.toFixed(2),...OWNERSHIP_FIELDS.map(k=>flags[k]?'YES':'')];})].map(line=>line.map(quote).join(',')).join('\r\n');download(state.projectName.replace(/[^a-z0-9_-]/gi,'_')+'_OWNERSHIP_PARCEL_STATIONS.csv',new Blob(['\ufeff'+data],{type:'text/csv;charset=utf-8'}));}
 function ownershipRouteSelected(){
  ownershipPicking=false;
  let route=Array.isArray(gisRoute)?gisRoute:gisRoute?.multi?.[0];if(!route||route.length<2)return alert('Select a continuous line for ownership stationing. Multipart lines require a single route.');
