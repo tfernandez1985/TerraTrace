@@ -2060,14 +2060,14 @@ window.terraTracePythonGIS={
   }
   msg('Download started for '+item.name+'. On iPad, use Safari Downloads / Save to Files.');
  }
- async function uploadFile(file){
+ async function uploadFile(file,parentId=folder?.id){
   if(!folder)throw Error('Connect to Google Drive first.');
   // Google Drive resumable upload; browser sends file directly to Google, not through a Windows PC.
-  const metadata={name:file.name,parents:[folder.id]};
+  const metadata={name:file.name,parents:[parentId]};
   const r=await api('/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true',{method:'POST',body:JSON.stringify(metadata),headers:{'Content-Type':'application/json; charset=UTF-8','X-Upload-Content-Type':file.type||'application/octet-stream','X-Upload-Content-Length':String(file.size)},raw:true});
   const location=r.headers.get('Location');
   if(!location)throw Error('Google Drive did not return a resumable upload session. Check browser CORS and upload permissions.');
-  const done=await fetch(location,{method:'PUT',headers:{'Content-Type':file.type||'application/octet-stream','Content-Range':'bytes 0-'+(file.size-1)+'/'+file.size},body:file});
+  const done=await fetch(location,{method:'PUT',headers:{'Content-Type':file.type||'application/octet-stream',...(file.size?{'Content-Range':'bytes 0-'+(file.size-1)+'/'+file.size}:{'Content-Length':'0'})},body:file});
   if(!done.ok)throw Error('Upload failed ('+done.status+'): '+(await done.text()).slice(0,400));
  }
  async function uploadSelected(){
@@ -2075,6 +2075,95 @@ window.terraTracePythonGIS={
   const input=$('ttDocsUpload');const files=Array.from(input.files||[]);
   if(!files.length)return msg('Choose one or more files first.');
   try{working(true);for(let i=0;i<files.length;i++){msg('Uploading '+(i+1)+' / '+files.length+': '+files[i].name);await uploadFile(files[i])}input.value='';await listFolder();msg('Uploaded '+files.length+' file(s) directly to Google Drive.')}catch(e){msg('Upload error: '+e.message)}finally{working(false)}
+ }
+ // Whole-folder upload: reproduce nested folder paths in Google Drive, not a flat batch.
+ async function findExistingFolder(parentId,name){
+  const q="'"+parentId.replace(/'/g,"\\'")+"' in parents and trashed = false and mimeType = '"+FOLDER+"' and name = '"+name.replace(/'/g,"\\'")+"'";
+  let token='';do{
+   const p={q,fields:'nextPageToken,files(id,name,mimeType)',pageSize:'1000',supportsAllDrives:'true',includeItemsFromAllDrives:'true'};
+   if(token)p.pageToken=token;
+   const result=await api('/drive/v3/files?'+params(p));
+   const match=(result.files||[]).find(x=>x.mimeType===FOLDER&&x.name===name);
+   if(match)return match.id;
+   token=result.nextPageToken||'';
+  }while(token);
+  return null;
+ }
+ async function createDriveFolder(parentId,name){
+  const response=await api('/drive/v3/files?supportsAllDrives=true&fields=id,name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,mimeType:FOLDER,parents:[parentId]})});
+  if(!response.id)throw Error('Drive did not return the ID of newly created folder '+name);
+  return response.id;
+ }
+ async function uploadTree(entries,folderPaths=[],source='folder'){
+  if(busy)return;
+  if(!folder)return msg('Connect to Google Drive first.');
+  if(!entries.length&&!folderPaths.length)return msg('No files were selected. Empty folders cannot be read using the browser folder picker; a ZIP can preserve them.');
+  const base=folder.id;
+  const cache=new Map([['',base]]);
+  const splitPath=v=>String(v||'').replace(/\\/g,'/').split('/').filter(x=>x&&x!=='.'&&x!=='..');
+  const ensurePath=async path=>{
+   const parts=splitPath(path);let prefix='',parentId=base;
+   for(const name of parts){
+    const key=prefix?prefix+'/'+name:name;
+    if(!cache.has(key)){
+     let id=await findExistingFolder(parentId,name);
+     if(!id)id=await createDriveFolder(parentId,name);
+     cache.set(key,id);
+    }
+    parentId=cache.get(key);prefix=key;
+   }
+   return parentId;
+  };
+  let uploaded=0;
+  try{
+   working(true);
+   // Create parent folders first, including empty directories from ZIPs.
+   const dirs=new Set(folderPaths);
+   for(const entry of entries){const parts=splitPath(entry.path);parts.pop();if(parts.length)dirs.add(parts.join('/'));}
+   const ordered=[...dirs].sort((a,b)=>splitPath(a).length-splitPath(b).length||a.localeCompare(b));
+   for(let i=0;i<ordered.length;i++){msg('Creating folders '+(i+1)+' / '+ordered.length+': '+ordered[i]);await ensurePath(ordered[i]);}
+   for(let i=0;i<entries.length;i++){
+    const entry=entries[i],parts=splitPath(entry.path),name=parts.pop();
+    if(!name)continue;
+    const parentId=await ensurePath(parts.join('/'));
+    msg('Uploading '+(i+1)+' / '+entries.length+': '+entry.path);
+    const file=entry.file.name===name?entry.file:new File([entry.file],name,{type:entry.file.type||'application/octet-stream'});
+    await uploadFile(file,parentId);
+    uploaded++;
+   }
+   await listFolder();
+   msg('Uploaded '+uploaded+' file(s) and '+cache.size-1+' folder(s) from '+source+' to Google Drive.');
+  }catch(e){msg('Folder upload stopped after '+uploaded+' / '+entries.length+' files: '+e.message+' (already uploaded items remain in Drive).')}
+  finally{working(false)}
+ }
+ async function uploadSelectedFolder(){
+  const input=$('ttDocsFolderUpload'),files=Array.from(input.files||[]);
+  if(!files.length)return msg('Choose a folder containing files first. For empty folders or iPad picker issues, use Upload Folder ZIP.');
+  const entries=files.map(file=>({file,path:file.webkitRelativePath||file.name}));
+  await uploadTree(entries,[],'selected folder');input.value='';
+ }
+ async function uploadZipFolder(){
+  if(busy)return;
+  const input=$('ttDocsZipUpload'),file=input.files?.[0];
+  if(!file)return msg('Choose a ZIP archive first.');
+  if(typeof JSZip==='undefined')return msg('ZIP support could not load; check the internet connection.');
+  try{
+   msg('Reading ZIP folder structure...');
+   const zip=await JSZip.loadAsync(file);
+   const entries=[],dirs=[];
+   const rootName=file.name.replace(/\.zip$/i,'').trim()||'Uploaded Folder';
+   for(const [path,item] of Object.entries(zip.files)){
+    if(path.startsWith('__MACOSX/')||path.split('/').some(x=>x==='..'||x==='__MACOSX'))continue;
+    const drivePath=rootName+'/'+path.replace(/^\/+/, '');
+    if(item.dir){dirs.push(drivePath);continue;}
+    const blob=await item.async('blob');
+    const name=path.split('/').filter(Boolean).pop();
+    if(!name)continue;
+    entries.push({path:drivePath,file:new File([blob],name,{type:blob.type||'application/octet-stream'})});
+   }
+   if(!entries.length&&!dirs.length)throw Error('Archive is empty');
+   await uploadTree(entries,[rootName,...dirs],'ZIP archive');
+  }catch(e){msg('ZIP upload error: '+e.message)}finally{input.value=''}
  }
  async function makeFolder(){
   if(!folder)return msg('Connect Google Drive first.');
@@ -2087,19 +2176,24 @@ window.terraTracePythonGIS={
   const section=document.createElement('details');section.className='tt-section';section.id='ttDocsSection';
   section.innerHTML=`<summary>DOCUMENT CENTER · GOOGLE DRIVE</summary><div class="tt-section-body">
   <div class="note">Upload (push), browse (pull), and download documents directly from Google Drive on Windows or iPad. No office PC or local G: drive connection required.</div>
-  <label>Google OAuth Web Client ID (one-time setup)</label><input id="ttDocsClientId" placeholder="123456789-...apps.googleusercontent.com" value="${h(DEFAULT_GOOGLE_CLIENT_ID)}" autocomplete="off" spellcheck="false">
-  <div class="note">Google sign-in is required. The client ID is public configuration, not a password. The app does not store your Google access token.</div>
-  <label>DOCUMENT CENTER folder ID (optional override)</label><input id="ttDocsFolderId" placeholder="Leave blank to resolve your G: shortcut automatically" autocomplete="off" spellcheck="false">
-  <div class="note">If shortcut discovery fails, open the DOCUMENT CENTER folder in Google Drive on the web and paste the ID from its URL here.</div>
+  <input type="hidden" id="ttDocsClientId" value="${h(DEFAULT_GOOGLE_CLIENT_ID)}">
+  <input type="hidden" id="ttDocsFolderId" value="">
   <div class="tt-doc-toolbar"><button type="button" class="btn primary" id="ttDocsConnect">Connect Google Drive</button><button type="button" class="btn" id="ttDocsDisconnect" disabled>Disconnect</button></div>
-  <div id="ttDocsStatus" class="tt-doc-status note">Not connected. Configure a Google OAuth Web Client ID to enable direct cloud access.</div>
+  <div id="ttDocsStatus" class="tt-doc-status note">Not connected. Sign in with an authorized Google account to access documents.</div>
   <div class="tt-doc-breadcrumb" id="ttDocsBreadcrumb"></div>
   <div class="tt-doc-toolbar"><button class="btn" id="ttDocsUp">↑ Up Folder</button><button class="btn" id="ttDocsRefresh">↻ Pull / Refresh</button><button class="btn" id="ttDocsNewFolder">＋ New Folder</button></div>
   <label>Find a document in the current folder</label><input id="ttDocsSearch" placeholder="Search filenames...">
   <div id="ttDocsFiles" style="max-height:390px;overflow-y:auto;margin:9px 0"><div class="note">Connect to browse documents.</div></div>
-  <label>Push / upload files from this device</label><input type="file" id="ttDocsUpload" multiple>
-  <button class="btn primary" type="button" id="ttDocsPush">↑ Push Files to Google Drive</button>
-  <div class="note">Downloaded files go to your browser's download location. On iPad, save them using the Files app. Only users with access to the Google folder can open or upload files.</div>
+  <label>Upload individual files</label><input type="file" id="ttDocsUpload" multiple>
+  <button class="btn primary" type="button" id="ttDocsPush">↑ Upload Selected Files</button>
+  <label>Upload a complete folder and its subfolders</label>
+  <input type="file" id="ttDocsFolderUpload" webkitdirectory directory multiple>
+  <button class="btn primary" type="button" id="ttDocsPushFolder">↑ Upload Entire Folder</button>
+  <div class="note">Creates the selected folder and its nested folders in Google Drive. Existing matching folders are reused. Files with matching names may be added as separate copies.</div>
+  <label>iPad fallback: upload a folder ZIP</label>
+  <input type="file" id="ttDocsZipUpload" accept=".zip,application/zip,application/x-zip-compressed">
+  <button class="btn" type="button" id="ttDocsPushZip">↑ Upload Folder ZIP (Extract in Drive)</button>
+  <div class="note">If your iPad cannot select a folder, compress it in the Files app and select the ZIP here. TerraTrace recreates its folder structure in Drive. Large ZIPs require device memory to extract. Downloads go to browser Downloads / iPad Files. Google folder permissions still apply.</div>
   </div>`;
   const ownership=$('ownershipSection');
   const manual=[...drawer.querySelectorAll('h2, summary')].find(x=>x.textContent.trim()==='MANUAL TEAM SYNC');
@@ -2109,6 +2203,7 @@ window.terraTracePythonGIS={
   $('ttDocsRefresh').onclick=async()=>{try{if(!folder)throw Error('Connect Google Drive first');working(true);await listFolder()}catch(e){msg(e.message)}finally{working(false)}};
   $('ttDocsUp').onclick=async()=>{if(trail.length<2)return;trail.pop();folder={...trail[trail.length-1]};try{await listFolder()}catch(e){msg(e.message)}};
   $('ttDocsNewFolder').onclick=makeFolder;$('ttDocsPush').onclick=uploadSelected;
+  $('ttDocsPushFolder').onclick=uploadSelectedFolder;$('ttDocsPushZip').onclick=uploadZipFolder;
   $('ttDocsSearch').oninput=render;
  }
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
