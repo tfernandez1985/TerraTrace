@@ -16,7 +16,7 @@
 #importedLayerList .tt-kmz-layer{display:flex;align-items:center;gap:9px;padding:7px 9px;border-top:1px solid #233a49;min-width:0}
 #importedLayerList .tt-kmz-layer span{flex:1;min-width:0;overflow-wrap:anywhere;font-size:11px}
 #importedLayerList .tt-kmz-layer input[type=color]{width:40px;min-width:40px;height:30px;padding:2px}
-</style><script>window.TT_CONFIG=Object.freeze({projectApi:'https://terratrace-api.supersurveyor1985.workers.dev',gisApi:'https://terratrace-gis-api.supersurveyor1985.workers.dev',defaultProject:'PICKTON_TRUNK',projectToken:'Mtf0213!?',gisToken:'5e950381c94dba6c9a9b4636ae817b45690eb6392f6fc088c8cb078bd8ad5346'});</script><script>window.ttVolatileStorage=(()=>{return {getItem:k=>null,setItem:(k,v)=>{},removeItem:k=>{}}})();</script><style>
+#cloudPublish,#manualInit,#newProject,#renameProject,#deleteProject,#openLocalProject,#saveLocalProject,#projectSelect{display:none!important}</style><script>window.TT_CONFIG=Object.freeze({projectApi:'https://terratrace-api.supersurveyor1985.workers.dev',gisApi:'https://terratrace-gis-api.supersurveyor1985.workers.dev',defaultProject:'PICKTON_TRUNK',projectToken:'Mtf0213!?',gisToken:'5e950381c94dba6c9a9b4636ae817b45690eb6392f6fc088c8cb078bd8ad5346'});</script><script>window.ttVolatileStorage=(()=>{return {getItem:k=>null,setItem:(k,v)=>{},removeItem:k=>{}}})();</script><style>
 #ttDocsSection .tt-doc-toolbar{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
 #ttDocsSection .tt-doc-toolbar .btn{width:auto;flex:1;min-width:95px;text-align:center}
 #ttDocsSection .tt-doc-item{border:1px solid #30485a;border-radius:7px;margin:7px 0;padding:9px;background:#111d29}
@@ -1811,30 +1811,26 @@ async function load(){const name=$('cloudProjectId').value.trim(),remote=await r
 const panel=document.createElement('div');panel.innerHTML='<h2>MANUAL TEAM SYNC</h2><div class="note" id="manualSyncStatus">Manual sync only · no browser storage</div><button class="btn primary" id="manualSync">↻ Sync Project</button><div class="flex"><button class="btn" id="manualInit">Initialize Cloud Sync (Admin)</button><button class="btn" id="manualLoad">Load Cloud Version</button></div><div class="note">Changes remain in memory until you save a local file or sync to cloud. Conflicts are not automatically overwritten.</div>';$('cloudStatus').after(panel);$('manualSync').onclick=sync;$('manualInit').onclick=()=>initialize().catch(e=>info(e.message));$('manualLoad').onclick=()=>load().catch(e=>info(e.message));
 })();
 </script><script>
-/* Local project controls: collapsible section after Manual Team Sync. */
+/* FIELD USER EDITION: cloud projects only. Management edition retains local creation/publishing. */
 (function(){
- function moveLocalProjectControls(){
-  const drawer=document.getElementById('drawer'), heading=[...drawer.querySelectorAll(':scope > h2')].find(x=>x.textContent.trim()==='PROJECT MANAGER');
-  const syncHeading=[...drawer.querySelectorAll('h2')].find(x=>x.textContent.trim()==='MANUAL TEAM SYNC');
-  if(!heading||!syncHeading)return;
-  const nodes=[];let n=heading.nextElementSibling;
-  while(n&&n.tagName!=='H2'){const next=n.nextElementSibling;nodes.push(n);n=next;}
-  const section=document.createElement('details');section.className='tt-section';
-  const summary=document.createElement('summary');summary.textContent='CREATE LOCAL PROJECT';
-  const body=document.createElement('div');body.className='tt-section-body';
-  section.append(summary,body);body.append(...nodes);
-  const syncPanel=syncHeading.parentElement;
-  syncPanel.after(section);
-  // Ownership is its own collapsible tab, directly under Manual Team Sync.
-  const ownershipSection=document.getElementById('ownershipSection');
-  if(ownershipSection){
-    syncPanel.after(ownershipSection);
-    ownershipSection.open=false;
+ function fieldCloudOnly(){
+  const drawer=document.getElementById('drawer');if(!drawer)return;
+  // Remove local project controls before the collapsible section builder runs.
+  const heading=[...drawer.querySelectorAll(':scope > h2')].find(x=>x.textContent.trim()==='PROJECT MANAGER');
+  if(heading){
+   let node=heading.nextElementSibling;
+   while(node&&node.tagName!=='H2'){const next=node.nextElementSibling;node.remove();node=next;}
+   heading.remove();
   }
-  heading.remove();
-  const newBtn=document.getElementById('newProject');if(newBtn)newBtn.textContent='＋ Create Local Project';
+  const section=[...drawer.querySelectorAll('details.tt-section')].find(x=>x.querySelector(':scope > summary')?.textContent.trim()==='CREATE LOCAL PROJECT');
+  if(section)section.remove();
+  // Keep users in cloud projects; remove actions reserved for management.
+  for(const id of ['cloudPublish','manualInit']){const item=document.getElementById(id);if(item)item.style.display='none';}
+  const cloudHeading=[...drawer.querySelectorAll('h2')].find(x=>x.textContent.includes('PROJECTS — R2 SYNC'));
+  if(cloudHeading)cloudHeading.textContent='CLOUD PROJECTS';
  }
- if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',moveLocalProjectControls);else moveLocalProjectControls();
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',fieldCloudOnly);
+ else fieldCloudOnly();
 })();
 </script><script>
 (function(){
