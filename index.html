@@ -38,7 +38,7 @@
 const persist=()=>{status('Unsaved edits — Save Project or Sync Project before closing')};let gisRoute=null,gisArea=[],gisPreview=null;const projectKey=name=>'vector_project_v4_'+encodeURIComponent(name);
 let knownProjects=[];
 function projectNames(){return knownProjects.filter(n=>!window.ttCloudIds?.has(n))}
-function projectList(){const names=projectNames();$('projectSelect').innerHTML=names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');if(names.includes(state.projectName))$('projectSelect').value=state.projectName}
+function projectList(){const names=projectNames(),select=$('projectSelect');if(!select)return;select.innerHTML=names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');if(names.includes(state.projectName))select.value=state.projectName}
 function projectSnapshot(){const {history,mode,drawing,inverse,selectedLine,trimTarget,annotationStart,dimensionStart,...data}=state;return data}
 function saveCurrent(){const name=state.projectName;memoryProjects.set(name,structuredClone(projectSnapshot()));if(!knownProjects.includes(name))knownProjects.push(name);projectList();status('Project in memory — use Save Project or Backup ZIP to keep it');return true}
 async function refreshProjects(){knownProjects=await dbNames();projectList()}
@@ -1815,12 +1815,12 @@ const panel=document.createElement('div');panel.innerHTML='<h2>MANUAL TEAM SYNC<
 (function(){
  function fieldCloudOnly(){
   const drawer=document.getElementById('drawer');if(!drawer)return;
-  // Remove local project controls before the collapsible section builder runs.
+  // Hide field-only local project controls; retain DOM nodes used by cloud loading.
   const heading=[...drawer.querySelectorAll(':scope > h2')].find(x=>x.textContent.trim()==='PROJECT MANAGER');
   if(heading){
+   heading.style.display='none';
    let node=heading.nextElementSibling;
-   while(node&&node.tagName!=='H2'){const next=node.nextElementSibling;node.remove();node=next;}
-   heading.remove();
+   while(node&&node.tagName!=='H2'){node.style.display='none';node=node.nextElementSibling;}
   }
   const section=[...drawer.querySelectorAll('details.tt-section')].find(x=>x.querySelector(':scope > summary')?.textContent.trim()==='CREATE LOCAL PROJECT');
   if(section)section.remove();
